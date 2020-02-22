@@ -5,7 +5,10 @@ services:
     build:
       context: .
     ports:
+      # host:container
       - "3000:3000"
     volumes:
       - ./server:/usr/src/app
+      # create volume to cache node_modules
+      - /usr/src/app/node_modules
     command: npm start
