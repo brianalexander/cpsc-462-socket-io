@@ -2,7 +2,7 @@
 <html>
   <head>
     <title>Socket.IO chat</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.3.0/socket.io.js"></script>
+    <meta charset="utf-8" />
     <script src="https://code.jquery.com/jquery-1.11.1.js"></script>
     <style>
       * {
@@ -55,54 +55,168 @@
   </body>
   <script>
     const connectedUsers = [];
-    const socket = io();
+
     $("#messageInput").submit(function(e) {
       e.preventDefault(); // prevents page reloading
-      socket.emit("chat message", $("#m").val());
-      $("#m").val("");
+      const text = $("#m").val();
+      console.log(text);
+      if (text !== "") {
+        if (text[0] === "@") {
+          const idRegex = /^@(.+)\s(.+)/;
+          // not a typo, the first comma ignores first value
+          const [, target, message] = text.match(idRegex);
+          sendPrivateMessage(socket, target, message);
+        } else {
+          sendPublicMessage(socket, text);
+        }
+
+        $("#m").val("");
+      }
+
       return false;
     });
-    socket.on("initialData", msg => {
-      const { userlist } = msg;
 
-      for (user of userlist) {
-        console.log(user);
-        connectedUsers.push(user.id);
-        $("#userlist").append($("<li>", { class: user.id }).text(user.id));
+    let socket = null;
+    let clientID = 0;
+
+    function connect() {
+      const serverUrl = "ws" + "://" + "localhost" + ":3000";
+
+      socket = new WebSocket(serverUrl);
+      console.log("***CREATED WEBSOCKET");
+
+      socket.onopen = function(evt) {
+        console.log("***ONOPEN");
+      };
+
+      socket.onmessage = function({ data }) {
+        console.log("DATA ", data);
+        const { type, payload } = JSON.parse(data);
+        console.log(type, payload);
+        switch (type) {
+          case "userlist":
+            {
+              const { users } = payload;
+              updateUserList(users);
+            }
+            break;
+          case "connected":
+            {
+              const { id } = payload;
+              socket.id = id;
+              // document.getElementById("text").disabled = false;
+              // document.getElementById("send").disabled = false;
+            }
+            break;
+          case "private":
+            {
+              const { sender, text } = payload;
+              addPrivateMessage(Date.now(), sender, text);
+            }
+            break;
+          case "public":
+            {
+              const { sender, text } = payload;
+              addPublicMessage(Date.now(), sender, text);
+            }
+            break;
+        }
+      };
+    }
+
+    function updateUserList(users) {
+      console.log("update user list");
+      $("#userlist").empty();
+      for (user of users) {
+        let userTag = $("<li>").text(user);
+        if (user === socket.id) {
+          userTag.css("color", "red");
+        }
+        $("#userlist").append(userTag);
+      }
+    }
+
+    function addPublicMessage(time, sender, text) {
+      addText(time, sender, text, "public");
+    }
+
+    function addPrivateMessage(time, sender, text) {
+      addText(time, sender, text, "private");
+    }
+
+    function addText(time, sender, text, className) {
+      $("#messages").append(
+        $("<li>")
+          .addClass(className)
+          .text("[" + sender + "]" + ": " + text)
+      );
+    }
+
+    function sendPublicMessage(socket, text) {
+      const message = messageMaker("public", { text });
+      sendMessageToServer(socket, message);
+      addPublicMessage(Date.now(), socket.id, text);
+    }
+
+    function sendPrivateMessage(socket, target, text) {
+      const message = messageMaker("private", { target, text });
+      sendMessageToServer(socket, message);
+      addPrivateMessage(Date.now(), socket.id, text);
+    }
+
+    function sendMessageToServer(socket, message) {
+      socket.send(message);
+    }
+
+    function messageMaker(type, payload) {
+      return JSON.stringify({ type, payload });
+    }
+
+    connect();
+
+    window.addEventListener("beforeunload", event => {
+      if (socket !== null) {
+        socket.close();
       }
     });
 
-    socket.on("userConnect", msg => {
-      const { user } = msg;
-      connectedUsers.push(user.id);
-      $("#userlist").append($("<li>", { class: user.id }).text(user.id));
-    });
+    // socket.on("userConnect", msg => {
+    //   const { user } = msg;
+    //   connectedUsers.push(user.id);
+    //   $("#userlist").append($("<li>", { class: user.id }).text(user.id));
+    // });
 
-    socket.on("whisper", function(msg) {
-      const { sender, message } = msg;
-      $("#messages").append(
-        $("<li>").text("WHISPER [" + sender + "]" + ": " + message)
-      );
-    });
+    // socket.on("whisper", function(msg) {
+    //   const { sender, message } = msg;
+    //   $("#messages").append(
+    //     $("<li>").text("WHISPER [" + sender + "]" + ": " + message)
+    //   );
+    // });
 
-    socket.on("chat message", function(msg) {
-      const { sender, message } = msg;
-      $("#messages").append(
-        $("<li>").text("[" + sender + "]" + ": " + message)
-      );
-    });
+    // socket.on("chat message", function(msg) {
+    //   const { sender, message } = msg;
+    //   $("#messages").append(
+    //     $("<li>").text("[" + sender + "]" + ": " + message)
+    //   );
+    // });
 
-    socket.on("userDisconnect", msg => {
-      const { user } = msg;
-      console.log("disconnect", "." + user.id);
-      connectedUsers.splice(connectedUsers.indexOf(user.id), 1);
-      $("." + user.id).remove();
-    });
+    // socket.on("userDisconnect", msg => {
+    //   const { user } = msg;
+    //   console.log("disconnect", "." + user.id);
+    //   connectedUsers.splice(connectedUsers.indexOf(user.id), 1);
+    //   $("." + user.id).remove();
+    // });
 
-    socket.on("disconnect", () => {
-      console.log("disconnect");
-      connectedUsers.splice(0, connectedUsers.length - 1);
-      $("#userlist").empty();
-    });
+    // socket.on("disconnect", () => {
+    //   console.log("disconnect");
+    //   connectedUsers.splice(0, connectedUsers.length - 1);
+    //   $("#userlist").empty();
+    //   let msg = {
+    //     type: type,
+    //     payload: {
+    //       text: text
+    //     }
+    //   };
+    // });
   </script>
 </html>
