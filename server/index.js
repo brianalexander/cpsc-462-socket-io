@@ -7,8 +7,6 @@ const wss = new WebSocket.Server({
   server: app
 });
 
-app.listen(3000);
-
 const rooms = {};
 
 wss.on("connection", socket => {
@@ -133,3 +131,6 @@ function handler(req, res) {
     res.end(data);
   });
 }
+
+app.listen(3000);
+console.log("Listening on port 3000...");
