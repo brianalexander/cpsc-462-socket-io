@@ -8,6 +8,8 @@ const wss = new WebSocket.Server({
 });
 
 const rooms = { public: [] };
+const games = [];
+const lobby = [];
 
 wss.on("connection", socket => {
   // Perform authenication
@@ -20,10 +22,20 @@ wss.on("connection", socket => {
     const { type, payload } = JSON.parse(data);
     console.log("MESSAGE: ", type, payload);
     switch (type) {
+      case "create-game":
+        {
+          createGameHandler(socket, payload);
+        }
+        break;
+      case "join-game":
+        {
+          joinRoomHandler(socket, payload);
+        }
+        break;
       case "public":
         {
           if (payload.text !== "") {
-            publicMessageHandler(wss, socket, payload);
+            publicMessageHandler(socket, payload);
           }
         }
         break;
@@ -67,7 +79,49 @@ function socketConnected(socket) {
   sendToAll(wss, userlistMessage);
 }
 
-function publicMessageHandler(wss, socket, payload) {
+function createGameHandler(socket, payload) {
+  const { name, public } = payload;
+  const game = {
+    name,
+    id: uuidv4(),
+    players: [socket.id],
+    status: "WAITING",
+    spectators: [],
+    timestamp: Date.now()
+  };
+
+  games[game.id] = game; // add game to the list of active games
+  rooms[game.id] = [socket]; // add the user to the room for that game
+  if (public) {
+    lobby.push(game.id); // the game is public, so add its id to the list of public games
+    sendLobbyHandler();
+  }
+}
+
+function sendLobbyHandler() {
+  // Only send public games to the lobby
+  let payload = [];
+  for (gameId of lobby) {
+    payload.push(games[gameId]);
+  }
+
+  sendToRoom("public", messageMaker("refresh-games", { games: payload }));
+}
+
+function joinRoomHandler(socket, payload) {
+  const { gameId } = payload;
+  if (games[gameId]["players"].length > 2) {
+    // add user to spectators
+    games[gameId]["spectators"] = [...games[gameId]["spectators"], socket.id];
+  } else {
+    if (gameId in games) {
+      // add users to players
+      games[gameId]["players"] = [...games[gameId]["players"], socket.id];
+    }
+  }
+}
+
+function publicMessageHandler(socket, payload) {
   const message = messageMaker("public", {
     ...payload,
     sender: socket.id,
