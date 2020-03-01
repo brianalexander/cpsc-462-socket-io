@@ -7,7 +7,7 @@ const wss = new WebSocket.Server({
   server: app
 });
 
-const rooms = {};
+const rooms = { public: [] };
 
 wss.on("connection", socket => {
   // Perform authenication
@@ -49,6 +49,24 @@ wss.on("connection", socket => {
 // =====
 // Utility Functions
 // =====
+function socketConnected(socket) {
+  socket.id = uuidv4();
+  // join personal room
+  rooms[socket.id] = [socket];
+
+  // join public chat channel
+  rooms["public"].push(socket);
+
+  const connectedMessage = messageMaker("connected", { id: socket.id });
+
+  sendToMe(socket, connectedMessage);
+
+  const userlistMessage = messageMaker("userlist", {
+    users: [...wss.clients].map(client => client.id)
+  });
+  sendToAll(wss, userlistMessage);
+}
+
 function publicMessageHandler(wss, socket, payload) {
   const message = messageMaker("public", {
     ...payload,
@@ -56,7 +74,7 @@ function publicMessageHandler(wss, socket, payload) {
     timestamp: Date.now()
   });
 
-  sendToOthers(wss, socket, message);
+  sendToRoom("public", message);
 }
 
 function privateMessageHandler(socket, payload) {
@@ -70,33 +88,10 @@ function privateMessageHandler(socket, payload) {
   sendToRoom(target, message);
 }
 
-function socketConnected(socket) {
-  socket.id = uuidv4();
-  rooms[socket.id] = [socket];
-
-  const connectedMessage = messageMaker("connected", { id: socket.id });
-
-  sendToMe(socket, connectedMessage);
-
-  const userlistMessage = messageMaker("userlist", {
-    users: [...wss.clients].map(client => client.id)
-  });
-  sendToAll(wss, userlistMessage);
-}
-
 function sendToAll(server, message) {
   console.log(message);
   for (const client of server.clients) {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
-  }
-}
-
-function sendToOthers(server, socket, message) {
-  console.log("send to others");
-  for (const client of server.clients) {
-    if (client.id !== socket.id && client.readyState === WebSocket.OPEN) {
       client.send(message);
     }
   }
@@ -112,7 +107,7 @@ function sendToRoom(room, message) {
       user.send(message);
     }
   } else {
-    console.log("USER DOES NTO EXIST");
+    console.log("ROOM DOES NOT EXIST");
   }
 }
 
@@ -134,3 +129,12 @@ function handler(req, res) {
 
 app.listen(3000);
 console.log("Listening on port 3000...");
+
+// function sendToOthers(server, socket, message) {
+//   console.log("send to others");
+//   for (const client of server.clients) {
+//     if (client.id !== socket.id && client.readyState === WebSocket.OPEN) {
+//       client.send(message);
+//     }
+//   }
+// }
