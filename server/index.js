@@ -1,19 +1,77 @@
-const app = require("http").createServer(handler);
+const express = require("express");
+const cors = require("cors");
+const app = express();
+const server = require("http").createServer(app);
 const WebSocket = require("ws");
+
+const jwtLib = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
-const fs = require("fs");
+
+const JWT_SECRET = "THIS_IS_A_TEST";
 
 const wss = new WebSocket.Server({
-  server: app
+  server
 });
 
+app.use(express.json());
+app.use(cors());
+
+const username_to_socket = {};
+const socket_to_username = {};
+
 const rooms = { public: [] };
+const users = {};
 const games = [];
 const lobby = [];
 
+app.post("/user", (req, res, next) => {
+  const { username } = req.body;
+  if (username in users) {
+    if (Date.now() - users[username] > 5000) {
+      delete users[username];
+    } else {
+      return res.status(409).json({ error: "Username taken." });
+    }
+  }
+
+  users[username] = Date.now();
+  return res.json(
+    jwtLib.sign({ data: req.body }, JWT_SECRET, { expiresIn: "15m" })
+  );
+});
+
+app.post("/tictactoe", (req, res, next) => {
+  const { jwt, roomName } = req.body;
+  try {
+    const { username } = jwtLib.verify(jwt, JWT_SECRET);
+
+    const game = {
+      roomName,
+      type: "tictactoe",
+      id: uuidv4(),
+      players: [username],
+      status: "waiting",
+      spectators: [],
+      timestamp: Date.now()
+    };
+
+    games[game.id] = game; // add game to the list of active games
+    rooms[game.id] = [socket]; // add the user to the room for that game
+    if (public) {
+      lobby.push(game.id); // the game is public, so add its id to the list of public games
+      sendLobbyHandler();
+    }
+
+    return res.json(
+      jwt.sign({ data: req.body }, JWT_SECRET, { expiresIn: "15m" })
+    );
+  } catch (error) {
+    return res.status(409).json({ error: "Invalid JWT." });
+  }
+});
+
 wss.on("connection", socket => {
   // Perform authenication
-  // socket.on("authenticate", msg => {});
   socketConnected(socket);
 
   // Handle messages
@@ -22,9 +80,9 @@ wss.on("connection", socket => {
     const { type, payload } = JSON.parse(data);
     console.log("MESSAGE: ", type, payload);
     switch (type) {
-      case "create-game":
+      case "register-user":
         {
-          createGameHandler(socket, payload);
+          registerUserHandler(socket, payload);
         }
         break;
       case "join-game":
@@ -68,33 +126,25 @@ function socketConnected(socket) {
 
   // join public chat channel
   rooms["public"].push(socket);
-
-  const connectedMessage = messageMaker("connected", { id: socket.id });
-
-  sendToMe(socket, connectedMessage);
-
-  const userlistMessage = messageMaker("userlist", {
-    users: [...wss.clients].map(client => client.id)
-  });
-  sendToAll(wss, userlistMessage);
 }
 
-function createGameHandler(socket, payload) {
-  const { name, public } = payload;
-  const game = {
-    name,
-    id: uuidv4(),
-    players: [socket.id],
-    status: "WAITING",
-    spectators: [],
-    timestamp: Date.now()
-  };
+function registerUserHandler(socket, payload) {
+  const { jwt } = payload;
+  try {
+    const { username } = jwtLib.verify(jwt, JWT_SECRET);
+    username_to_socket[username] = socket.id;
+    socket_to_username[socket.id] = username;
 
-  games[game.id] = game; // add game to the list of active games
-  rooms[game.id] = [socket]; // add the user to the room for that game
-  if (public) {
-    lobby.push(game.id); // the game is public, so add its id to the list of public games
-    sendLobbyHandler();
+    const connectedMessage = messageMaker("connected", { username });
+
+    // sendToMe(socket, connectedMessage);
+
+    const userlistMessage = messageMaker("userlist", {
+      users: [...wss.clients].map(client => socket_to_username[client.id])
+    });
+    sendToAll(wss, userlistMessage);
+  } catch (error) {
+    console.log(error);
   }
 }
 
@@ -169,19 +219,7 @@ function messageMaker(type, payload) {
   return JSON.stringify({ type, payload });
 }
 
-function handler(req, res) {
-  fs.readFile(__dirname + "/local_test.html", function(err, data) {
-    if (err) {
-      res.writeHead(500);
-      return res.end("Error loading index.html");
-    }
-
-    res.writeHead(200);
-    res.end(data);
-  });
-}
-
-app.listen(3000);
+server.listen(3000);
 console.log("Listening on port 3000...");
 
 // function sendToOthers(server, socket, message) {
