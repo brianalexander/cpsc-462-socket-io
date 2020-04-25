@@ -10,7 +10,7 @@ const { v4: uuidv4 } = require("uuid");
 const JWT_SECRET = "THIS_IS_A_TEST";
 
 const wss = new WebSocket.Server({
-  server
+  server,
 });
 
 app.use(express.json());
@@ -21,8 +21,14 @@ const socket_to_username = {};
 
 const rooms = { public: [] };
 const users = {};
-const games = [];
+const games = {};
+
 const lobby = [];
+
+// setInterval(() => {
+//   console.log("USERS", users);
+//   console.log("ROOMS", rooms);
+// }, 5000);
 
 app.post("/user", (req, res, next) => {
   const { username } = req.body;
@@ -40,42 +46,59 @@ app.post("/user", (req, res, next) => {
   );
 });
 
+let game_id = -1;
+
+function nextId() {
+  game_id = game_id + 1;
+  return game_id;
+}
+
 app.post("/tictactoe", (req, res, next) => {
-  const { jwt, roomName } = req.body;
+  console.log("received");
+  const { jwt, name } = req.body;
   try {
     const { username } = jwtLib.verify(jwt, JWT_SECRET);
 
     const game = {
-      roomName,
+      name: name,
       type: "tictactoe",
-      id: uuidv4(),
-      players: [username],
       status: "waiting",
+      id: nextId(),
+      players: [],
+      stepNumber: 0,
+      xIsNext: true,
+      history: [
+        {
+          squares: Array(9).fill(null),
+        },
+      ],
       spectators: [],
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
 
     games[game.id] = game; // add game to the list of active games
-    rooms[game.id] = [socket]; // add the user to the room for that game
-    if (public) {
-      lobby.push(game.id); // the game is public, so add its id to the list of public games
-      sendLobbyHandler();
-    }
+    rooms[game.id] = [];
 
-    return res.json(
-      jwt.sign({ data: req.body }, JWT_SECRET, { expiresIn: "15m" })
-    );
+    lobby.push(game.id);
+    // rooms[game.id] = [socket]; // add the user to the room for that game
+    // if (public) {
+    //   lobby.push(game.id); // the game is public, so add its id to the list of public games
+    //   sendLobbyHandler();
+    // }
+
+    return res.json(game);
   } catch (error) {
+    console.log(error);
     return res.status(409).json({ error: "Invalid JWT." });
   }
 });
 
-wss.on("connection", socket => {
+wss.on("connection", (socket) => {
   // Perform authenication
   socketConnected(socket);
 
   // Handle messages
-  socket.on("message", data => {
+  socket.on("message", (data) => {
     console.log("message before parse: ", data);
     const { type, payload } = JSON.parse(data);
     console.log("MESSAGE: ", type, payload);
@@ -85,9 +108,14 @@ wss.on("connection", socket => {
           registerUserHandler(socket, payload);
         }
         break;
+      case "game-state":
+        {
+          gameStateHandler(socket, payload);
+        }
+        break;
       case "join-game":
         {
-          joinRoomHandler(socket, payload);
+          joinGameHandler(socket, payload);
         }
         break;
       case "public":
@@ -110,7 +138,7 @@ wss.on("connection", socket => {
   // Handle disconnect
   socket.on("close", (code, reason) => {
     const message = messageMaker("userlist", {
-      users: [...wss.clients].map(client => client.id)
+      users: [...wss.clients].map((client) => socket_to_username[client.id]),
     });
     sendToAll(wss, message);
   });
@@ -129,18 +157,21 @@ function socketConnected(socket) {
 }
 
 function registerUserHandler(socket, payload) {
+  console.log("registerUserHandler", socket.id);
   const { jwt } = payload;
   try {
-    const { username } = jwtLib.verify(jwt, JWT_SECRET);
-    username_to_socket[username] = socket.id;
+    const { data } = jwtLib.verify(jwt, JWT_SECRET);
+    const { username } = data;
+
+    username_to_socket[username] = socket;
     socket_to_username[socket.id] = username;
 
-    const connectedMessage = messageMaker("connected", { username });
+    // const connectedMessage = messageMaker("connected", { username });
 
     // sendToMe(socket, connectedMessage);
 
     const userlistMessage = messageMaker("userlist", {
-      users: [...wss.clients].map(client => socket_to_username[client.id])
+      users: [...wss.clients].map((client) => socket_to_username[client.id]),
     });
     sendToAll(wss, userlistMessage);
   } catch (error) {
@@ -158,24 +189,37 @@ function sendLobbyHandler() {
   sendToRoom("public", messageMaker("refresh-games", { games: payload }));
 }
 
-function joinRoomHandler(socket, payload) {
-  const { gameId } = payload;
-  if (games[gameId]["players"].length > 2) {
-    // add user to spectators
-    games[gameId]["spectators"] = [...games[gameId]["spectators"], socket.id];
-  } else {
-    if (gameId in games) {
-      // add users to players
-      games[gameId]["players"] = [...games[gameId]["players"], socket.id];
-    }
+function joinGameHandler(socket, payload) {
+  const { id, jwt } = payload;
+  try {
+    const { data } = jwtLib.verify(jwt, JWT_SECRET);
+    const { username } = data;
+    console.log('USERNAME')
+    // console.log('U TO S', username_to_socket)
+
+    const socket = username_to_socket[username];
+    rooms[id].push(socket);
+  } catch (error) {
+    console.log(error);
   }
+}
+
+function gameStateHandler(socket, payload) {
+  const { id, state } = payload;
+
+  console.log(games[id]);
+
+  games[id] = { ...games[id], ...state };
+
+  console.log(games[id]);
+  sendToRoom(id, messageMaker("game-state", games[id]));
 }
 
 function publicMessageHandler(socket, payload) {
   const message = messageMaker("public", {
     ...payload,
     sender: socket.id,
-    timestamp: Date.now()
+    timestamp: Date.now(),
   });
 
   sendToRoom("public", message);
@@ -186,7 +230,7 @@ function privateMessageHandler(socket, payload) {
   const message = messageMaker("private", {
     ...rest,
     sender: socket.id,
-    timestamp: Date.now()
+    timestamp: Date.now(),
   });
 
   sendToRoom(target, message);
