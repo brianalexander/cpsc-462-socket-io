@@ -20,6 +20,7 @@ app.use(cors());
 const rooms = {};
 const users = {};
 const games = {};
+const ai_client = { socket: null, id: null, jwt: null };
 
 // setInterval(() => {
 //   console.log("USERS", users);
@@ -92,9 +93,19 @@ wss.on("connection", (socket) => {
     const { type, payload } = JSON.parse(data);
     // console.log("MESSAGE: ", type, payload);
     switch (type) {
+      case "register-ai-client":
+        {
+          registerAiClientHandler(socket, payload);
+        }
+        break;
       case "connect-game":
         {
           connectGameHandler(socket, payload);
+        }
+        break;
+      case "new-game":
+        {
+          newGameHandler(socket, payload);
         }
         break;
       case "game-state":
@@ -121,9 +132,53 @@ function socketConnected(socket) {
   rooms[socket.id] = [];
 }
 
+function registerAiClientHandler(socket, payload) {
+  user = socket.id;
+  // CREATE JWT FOR USER
+  userJwt = jwtLib.sign({ data: { user } }, JWT_SECRET, {
+    expiresIn: "12h",
+  });
+
+  ai_client.socket = socket;
+  ai_client.id = socket.id;
+  ai_client.jwt = userJwt;
+
+  rooms[socket.id] = [socket];
+
+  console.log("AI-CLIENT CONNECTED", ai_client.id);
+  socket.send(messageMaker("set-jwt", { jwt: userJwt }));
+}
+
+function newGameHandler(socket, payload) {
+  const { jwt } = payload;
+  let userJwt;
+  let user;
+
+  const { exp, data } = jwtDecode(jwt);
+  user = data.user;
+  userJwt = jwt;
+
+  const game = {
+    id: nextId(),
+    room: user,
+    stepNumber: 0,
+    xIsNext: true,
+    history: [
+      {
+        squares: Array(9).fill(null),
+      },
+    ],
+    timestamp: Date.now(),
+  };
+
+  // save game state
+  games[user] = game;
+
+  socket.send(messageMaker("game-state", { id: user, game: games[user] }));
+}
+
 function connectGameHandler(socket, payload) {
   const { jwt } = payload;
-  console.log("INCOMING JWT", jwt);
   let userJwt;
   let user;
 
@@ -165,6 +220,7 @@ function connectGameHandler(socket, payload) {
 
     // add user to room
     rooms[user].push(socket);
+    // rooms[user].push(ai_client.socket);
 
     // TODO: SEND WS MESSAGE TO PYTHON SERVER TO CREATE AI AND CONNECT
     // TODO: SET TIMEOUT ON MESSAGE.  ON RESPONSE CANCEL TIMEOUT AND UPDATE USERS GAME
@@ -177,18 +233,29 @@ function connectGameHandler(socket, payload) {
 
 function gameStateHandler(socket, payload) {
   console.log("GAMESTATEHANDLER");
-  const { jwt, state } = payload;
+  const { id, jwt, state } = payload;
 
   const { exp, data } = jwtDecode(jwt);
-  const user = data.user;
+  console.log("STATE", state);
+  const user = state.id;
 
-  console.log(games[user]);
+  console.log(games[id]);
 
   // UPDATE GAME STATE
-  games[user] = { ...games[user], ...state };
+  games[id] = { ...games[id], ...state };
 
-  // FORWARD TO ROOM
-  sendToRoom(user, messageMaker("game-state", { id: user, game: games[user] }));
+  console.log("INCOMING JWT", jwt);
+  console.log("ai_client.jwt", ai_client.jwt);
+  if (jwt === ai_client.jwt) {
+    sendToRoom(id, messageMaker("game-state", { id: id, game: games[id] }));
+  } else {
+    // FORWARD TO ROOM
+    sendToRoom(
+      ai_client.id,
+      messageMaker("game-state", { id: id, game: games[id] })
+    );
+    sendToRoom(id, messageMaker("game-state", { id: id, game: games[id] }));
+  }
 }
 
 function sendToAll(server, message) {
